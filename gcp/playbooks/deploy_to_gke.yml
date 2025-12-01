@@ -1,0 +1,58 @@
+---
+# Playbook: Deploy a microservice to GKE
+# Requires:
+# - gcloud CLI installed and authenticated (or a service account gcloud login)
+# - Ansible collection: ansible-galaxy collection install kubernetes.core
+# - kubectl available (gcloud will configure kubeconfig)
+- name: Deploy microservice to GKE
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    gke_project: "YOUR_GCP_PROJECT"
+    gke_cluster: "YOUR_CLUSTER_NAME"
+    gke_zone: "YOUR_CLUSTER_ZONE"            # or set gke_region instead and change command below
+    kube_namespace: "microservice"
+    app_name: "my-microservice"
+    image: "gcr.io/YOUR_GCP_PROJECT/my-image:latest"
+    replicas: 2
+
+  tasks:
+    - name: Get GKE credentials for kubectl (uses gcloud)
+      ansible.builtin.command: >
+        gcloud container clusters get-credentials {{ gke_cluster }}
+        --project {{ gke_project }}
+        --zone {{ gke_zone }}
+      changed_when: false
+
+    - name: Ensure namespace exists
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Namespace
+        name: "{{ kube_namespace }}"
+        state: present
+
+    - name: Render Kubernetes manifest (template -> temp file)
+      ansible.builtin.template:
+        src: ../deploy_microservice/deployment.yaml
+        dest: /tmp/{{ app_name }}-deployment.yaml
+      vars:
+        image: "{{ image }}"
+        app_name: "{{ app_name }}"
+        replicas: "{{ replicas }}"
+        kube_namespace: "{{ kube_namespace }}"
+
+    - name: Apply Kubernetes manifest to cluster
+      kubernetes.core.k8s:
+        src: /tmp/{{ app_name }}-deployment.yaml
+        state: present
+
+    - name: Wait for deployment rollout to finish
+      ansible.builtin.command:
+        cmd: kubectl rollout status deployment/{{ app_name }} -n {{ kube_namespace }}
+      register: rollout
+      retries: 6
+      delay: 10
+      until: rollout.rc == 0
+      changed_when: false

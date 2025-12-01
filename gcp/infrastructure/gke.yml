@@ -1,0 +1,51 @@
+---
+# Playbook: Create a GKE cluster
+# Prereqs:
+# - ansible-galaxy collection install google.cloud
+# - Service account JSON with container.clusters.create & IAM perms
+- name: Create GKE cluster
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    gcp_project: "your-gcp-project-id"
+    gcp_zone: "us-central1-a"                # or set gcp_region and use region param
+    service_account_file: /Users/mohan/.gcp/credentials.json
+
+    cluster_name: "my-gke-cluster"
+    initial_node_count: 3
+    machine_type: "e2-medium"
+    disk_size_gb: 100
+    network: "default"                       # or full network path if needed
+    subnetwork: ""                           # set if you use custom subnetwork
+    enable_ip_alias: true
+
+  tasks:
+    - name: Create GKE cluster
+      google.cloud.gcp_container_cluster:
+        auth_kind: serviceaccount
+        service_account_file: "{{ service_account_file }}"
+        project: "{{ gcp_project }}"
+        zone: "{{ gcp_zone }}"
+        name: "{{ cluster_name }}"
+        initial_node_count: "{{ initial_node_count }}"
+        node_config:
+          machine_type: "{{ machine_type }}"
+          disk_size_gb: "{{ disk_size_gb }}"
+          oauth_scopes:
+            - https://www.googleapis.com/auth/cloud-platform
+        network: "{{ network }}"
+        subnetwork: "{{ subnetwork | default(omit) }}"
+        ip_allocation_policy:
+          use_ip_aliases: "{{ enable_ip_alias | bool }}"
+        state: present
+      register: gke_create
+
+    - name: Get kubeconfig for cluster (so kubectl/k8s modules can be used)
+      ansible.builtin.command: >
+        gcloud container clusters get-credentials {{ cluster_name }}
+        --zone {{ gcp_zone }}
+        --project {{ gcp_project }}
+      changed_when: false
+      when: gke_create.changed | default(true)

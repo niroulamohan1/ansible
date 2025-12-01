@@ -1,0 +1,68 @@
+---
+# Playbook: Create a GCP Compute Engine VM
+# Prereqs:
+# - Install google.cloud collection: ansible-galaxy collection install google.cloud
+# - Ensure service account JSON with compute.instanceAdmin & related perms is available.
+# - Adjust vars below (project/zone/service_account_file/etc.)
+- name: Create GCE instance
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    gcp_project: "your-gcp-project-id"
+    gcp_zone: "us-central1-a"
+    service_account_file: /Users/mohan/.gcp/credentials.json
+
+    instance_name: "my-instance"
+    instance_count: 4
+    machine_type: "e2-medium"
+    image_family: "ubuntu-2204-lts"
+    image_project: "ubuntu-os-cloud"
+    disk_size_gb: 10
+    disk_type: "pd-standard"       # pd-standard or pd-ssd
+    network: "default"
+    tags:
+      - http-server
+    # This injects your local public key into the instance's authorized_keys
+    ssh_public_key_path: "~/.ssh/id_rsa.pub"
+
+  tasks:
+    - name: Read public SSH key (controller)
+      ansible.builtin.slurp:
+        src: "{{ ssh_public_key_path }}"
+      register: pubkey
+      changed_when: false
+
+    - name: Create GCE VMs
+      google.cloud.gcp_compute_instance:
+        auth_kind: serviceaccount
+        service_account_file: "{{ service_account_file }}"
+        project: "{{ gcp_project }}"
+        zone: "{{ gcp_zone }}"
+        name: "{{ instance_name }}-{{ item }}"
+        machine_type: "{{ machine_type }}"
+        disks:
+          - boot: true
+            auto_delete: true
+            initialize_params:
+              source_image: "projects/{{ image_project }}/global/images/family/{{ image_family }}"
+              disk_size_gb: "{{ disk_size_gb }}"
+        network_interfaces:
+          - network: "global/networks/{{ network }}"
+            access_configs:
+              - name: External NAT
+                type: ONE_TO_ONE_NAT
+        tags: "{{ tags }}"
+        metadata:
+          ssh-keys: "ansible:{{ pubkey.content | b64decode | trim }}"
+      loop: "{{ range(1, instance_count + 1) | list }}"
+      register: created_instances
+      loop_control:
+        label: "{{ instance_name }}-{{ item }}"
+
+    - name: Debug created instances (show external IP)
+      ansible.builtin.debug:
+        msg: "{{ item.item }} -> {{ item.instance.networkInterfaces[0].accessConfigs[0].natIP | default('no-external-ip') }}"
+      loop: "{{ created_instances.results }}"
+      when: item.instance is defined

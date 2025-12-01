@@ -1,0 +1,83 @@
+---
+# Playbook: Patch GCP Compute Engine VMs via Red Hat Satellite (subscription-manager)
+# Notes:
+# - This playbook expects your dynamic GCP inventory (e.g. gcp_compute_engine.yml) to be used.
+# - Provide satellite details (server/org/activation key) via vars or group/host vars.
+# - By default this does not force a reboot; set reboot_after_update: true to reboot upgraded hosts.
+# - Ensure the service account used to access GCP instances and your SSH keys are configured in the inventory.
+- name: Patch GCP Compute Engines using Red Hat Satellite
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars:
+    satellite_org: "YOUR_ORG"                            # Satellite organization
+    satellite_activation_key: "YOUR_ACTIVATION_KEY"      # Activation key to register systems
+    subscription_register_extra_args: ""                 # any extra args to subscription-manager register
+    reboot_after_update: false                           # set true if you want automatic reboot after update
+
+  tasks:
+    - name: Ensure subscription-manager is installed
+      package:
+        name: subscription-manager
+        state: present
+
+    - name: Register system to Satellite using activation key
+      ansible.builtin.command: >
+        subscription-manager register
+        --org="{{ satellite_org }}"
+        --activationkey="{{ satellite_activation_key }}"
+        --force {{ subscription_register_extra_args }}
+      register: register_out
+      changed_when: register_out.rc == 0 and
+                    ("Registered" in (register_out.stdout + register_out.stderr) or
+                     "Successfully registered" in (register_out.stdout + register_out.stderr))
+      failed_when: register_out.rc != 0 and
+                   ("System is already registered" not in (register_out.stdout + register_out.stderr))
+
+    - name: Auto-attach subscriptions (safe to run even if activation key already attached)
+      ansible.builtin.command: subscription-manager attach --auto
+      register: attach_out
+      failed_when: attach_out.rc != 0 and ("Nothing to do" not in (attach_out.stdout + attach_out.stderr))
+      changed_when: "'Successfully attached' in (attach_out.stdout + attach_out.stderr)"
+
+    - name: Ensure package manager utilities present (yum-utils for needs-restarting)
+      package:
+        name: "{{ 'yum-utils' if ansible_facts.pkg_mgr == 'yum' else 'dnf-plugins-core' }}"
+        state: present
+      when: ansible_facts.pkg_mgr is defined
+
+    - name: Update all packages (yum)
+      ansible.builtin.yum:
+        name: '*'
+        state: latest
+      when: ansible_facts.pkg_mgr == 'yum'
+      register: update_result_yum
+
+    - name: Update all packages (dnf)
+      ansible.builtin.dnf:
+        name: '*'
+        state: latest
+      when: ansible_facts.pkg_mgr == 'dnf'
+      register: update_result_dnf
+
+    - name: Determine if reboot is required (uses needs-restarting if available)
+      ansible.builtin.command: needs-restarting -r
+      register: needs_restarting
+      changed_when: false
+      ignore_errors: true
+
+    - name: Set reboot_required fact
+      set_fact:
+        reboot_required: "{{ (needs_restarting.rc == 1) or (reboot_after_update | bool) }}"
+      when: needs_restarting is defined
+
+    - name: Reboot the host if required or requested
+      reboot:
+        reboot_timeout: 600
+      when: reboot_required | bool
+
+    - name: Wait for SSH after reboot (if rebooted)
+      wait_for_connection:
+        timeout: 300
+      when: reboot_required | bool

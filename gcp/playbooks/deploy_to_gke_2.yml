@@ -1,0 +1,89 @@
+---
+# Playbook: Deploy a microservice to GKE
+# Requires:
+# - gcloud CLI installed and authenticated (or a service account gcloud login)
+# - Ansible collection: ansible-galaxy collection install kubernetes.core
+# - kubectl available (gcloud will configure kubeconfig)
+- name: Deploy microservice to GKE
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    gke_project: "YOUR_GCP_PROJECT"
+    gke_cluster: "YOUR_CLUSTER_NAME"
+    gke_zone: "YOUR_CLUSTER_ZONE"            # or set gke_region instead and change command below
+    kube_namespace: "microservice"
+    app_name: "my-microservice"
+    image: "gcr.io/YOUR_GCP_PROJECT/my-image:latest"
+    replicas: 2
+
+  tasks:
+    - name: Get GKE credentials for kubectl (uses gcloud)
+      ansible.builtin.command: >
+        gcloud container clusters get-credentials {{ gke_cluster }}
+        --project {{ gke_project }}
+        --zone {{ gke_zone }}
+      changed_when: false
+
+    - name: Ensure namespace exists
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Namespace
+        name: "{{ kube_namespace }}"
+        state: present
+
+    - name: Create/Update Deployment (applied via kubernetes.core.k8s, waits for rollout)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: "{{ app_name }}"
+            namespace: "{{ kube_namespace }}"
+            labels:
+              app: "{{ app_name }}"
+          spec:
+            replicas: "{{ replicas | int }}"
+            selector:
+              matchLabels:
+                app: "{{ app_name }}"
+            template:
+              metadata:
+                labels:
+                  app: "{{ app_name }}"
+              spec:
+                containers:
+                  - name: "{{ app_name }}"
+                    image: "{{ image }}"
+                    ports:
+                      - containerPort: 8080
+                    readinessProbe:
+                      httpGet:
+                        path: /
+                        port: 8080
+                      initialDelaySeconds: 5
+                      periodSeconds: 10
+        wait: yes
+        wait_timeout: 300
+
+    - name: Create/Update Service
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: "{{ app_name }}-svc"
+            namespace: "{{ kube_namespace }}"
+          spec:
+            selector:
+              app: "{{ app_name }}"
+            ports:
+              - protocol: TCP
+                port: 80
+                targetPort: 8080
+            type: ClusterIP
+        wait: yes
+        wait_timeout: 120

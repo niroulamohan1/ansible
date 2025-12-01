@@ -1,0 +1,43 @@
+# Notes:
+# - Install and enable the google.cloud collection:
+#   ansible-galaxy collection install google.cloud
+# - Ensure the service account JSON has compute.instances.list & compute.instances.get permissions.
+# - Save this file and point Ansible to it as an inventory source:
+#   ansible-inventory -i /Users/mohan/vscodeprojects/ansible/gcp/inventory/gcp_compute_engine.yml --list
+# - Adjust service_account_file path and projects list as needed
+plugin: google.cloud.gcp_compute
+# Replace with one or more GCP project IDs
+projects:
+  - your-gcp-project-id
+# Authentication: service account JSON file (adjust path)
+auth_kind: serviceaccount
+service_account_file: /Users/mohan/.gcp/credentials.json #if using anible tower, it will use the credential file from the credential store
+
+# List all zones or restrict to specific ones
+zones:
+  - all
+
+# Optional: only include running instances
+filters:
+  - status = RUNNING
+
+# Which instance fields to use for hostnames (fall back to 'name')
+hostnames:
+  - name
+
+# Map instance attributes into hostvars
+compose:
+  # prefer internal IP
+  ansible_host: networkInterfaces[0].networkIP
+  gcp_zone: zone
+  gcp_machine_type: machineType
+  gcp_labels: labels
+
+# Create inventory groups dynamically
+keyed_groups:
+  - key: zone
+    prefix: gcp_zone
+  - key: labels.env
+    prefix: env
+  - key: project
+    prefix: gcp_project
