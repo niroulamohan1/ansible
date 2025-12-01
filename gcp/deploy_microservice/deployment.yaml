@@ -1,0 +1,44 @@
+# Jinja2-templated Kubernetes manifest for Deployment + Service
+# Usage: rendered by the playbook deploy_to_gke.yml (variables provided there).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ app_name }}
+  namespace: {{ kube_namespace }}
+  labels:
+    app: {{ app_name }}
+spec:
+  replicas: {{ replicas }}
+  selector:
+    matchLabels:
+      app: {{ app_name }}
+  template:
+    metadata:
+      labels:
+        app: {{ app_name }}
+    spec:
+      containers:
+        - name: {{ app_name }}
+          image: "{{ image }}"
+          ports:
+            - containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ app_name }}-svc
+  namespace: {{ kube_namespace }}
+spec:
+  selector:
+    app: {{ app_name }}
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8080
+  type: ClusterIP
